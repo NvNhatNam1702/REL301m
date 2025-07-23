@@ -7,28 +7,33 @@ import random
 import os
 from collections import deque
 import tkinter as tk
-
+from config import *
+# ==============================================================================
+# --- WAREHOUSE ENVIRONMENT CLASS ---
+# ==============================================================================
 class WarehouseEnvMultiPod:
     def __init__(self, seed=None):
         self.seed(seed)
-        self.grid_height = 10
-        self.grid_width = 10
-        self.max_pods_per_cell = 3
+        self.grid_height = GRID_HEIGHT
+        self.grid_width = GRID_WIDTH
+        self.max_pods_per_cell = MAX_PODS_PER_CELL
         self.grid = np.zeros((self.grid_height, self.grid_width), dtype=int)
-        self.workstations = [(9, 0)]
-        self.delivery_locations = [(0, 9)]
-        self._generate_random_pods()
-        self.cell_size = 40
+        self.workstations = WORKSTATIONS
+        self.delivery_locations = DELIVERY_LOCATIONS
+        self.cell_size = CELL_SIZE
         self.window = None
         self.canvas = None
-        self._init_visualization()
         self.robot_pos = self.workstations[0]
         self.delivered_pods = 0
         self.path = []
         self.pods_carried = 0
-        self.max_capacity = 3
+        self.max_capacity = MAX_CAPACITY
         self.step_count = 0
-        self.max_steps = 1500
+        self.max_steps = MAX_STEPS_PER_EPISODE
+        # Initialize after all attributes are set
+        self._generate_random_pods()
+        self._init_visualization()
+
 
     def _init_visualization(self):
         if self.window is None:
@@ -48,15 +53,16 @@ class WarehouseEnvMultiPod:
         ]
         total_pods = 0
         for r, c in available_cells:
-            if random.random() < 0.3:
+            if random.random() < POD_GENERATION_PROB:
                 pods = random.randint(1, self.max_pods_per_cell)
                 self.grid[r, c] = pods
                 total_pods += pods
             else:
                 self.grid[r, c] = 0
-        remainder = total_pods % 3
+        
+        remainder = total_pods % MAX_CAPACITY
         if remainder != 0:
-            pods_to_add = 3 - remainder
+            pods_to_add = MAX_CAPACITY - remainder
             random.shuffle(available_cells)
             for r, c in available_cells:
                 if pods_to_add == 0:
@@ -159,15 +165,18 @@ class WarehouseEnvMultiPod:
                 pods_to_pick = min(pods_available, capacity_left)
                 self.grid[self.robot_pos] -= pods_to_pick
                 self.pods_carried += pods_to_pick
-                reward += 1 * pods_to_pick if np.sum(self.grid) > 3 else 2 * pods_to_pick  # Increased reward for sparse pods
+                pickup_reward = REWARD_PICKUP_SPARSE if np.sum(self.grid) < SPARSE_POD_THRESHOLD else REWARD_PICKUP_NORMAL
+                reward += pickup_reward * pods_to_pick
+            
             if self.robot_pos in self.delivery_locations and self.pods_carried > 0:
-                reward += self.pods_carried
+                reward += self.pods_carried * REWARD_DELIVERY_MULTIPLIER
                 self.delivered_pods += self.pods_carried
                 self.pods_carried = 0
             else:
-                reward = -0.1
+                reward += PENALTY_MOVE
         else:
-            reward = -0.1
+            reward = PENALTY_MOVE
+        
         done = self.all_pods_delivered() or self.step_count >= self.max_steps
         if render:
             self.render(total_reward=total_reward)
@@ -180,18 +189,24 @@ class WarehouseEnvMultiPod:
             np.random.seed(seed)
             torch.manual_seed(seed)
 
+# ==============================================================================
+# --- NEURAL NETWORK AND REPLAY BUFFER CLASSES ---
+# ==============================================================================
 class QNetwork(nn.Module):
     def __init__(self, input_channels, output_dim):
         super(QNetwork, self).__init__()
-        self.conv1 = nn.Conv2d(input_channels, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.fc1 = nn.Linear(64 * 10 * 10, 128)
-        self.fc2 = nn.Linear(128, output_dim)
+        self.conv1 = nn.Conv2d(input_channels, CONV1_OUT_CHANNELS, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(CONV1_OUT_CHANNELS, CONV2_OUT_CHANNELS, kernel_size=3, padding=1)
+        
+        # BUG FIX: Correctly calculate the flattened size after convolutions
+        fc1_input_features = CONV2_OUT_CHANNELS * GRID_HEIGHT * GRID_WIDTH
+        self.fc1 = nn.Linear(fc1_input_features, FC1_OUT_FEATURES)
+        self.fc2 = nn.Linear(FC1_OUT_FEATURES, output_dim)
 
     def forward(self, x):
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
-        x = x.view(x.size(0), -1)
+        x = x.view(x.size(0), -1) # Flatten the tensor
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         return x
@@ -209,10 +224,13 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
+# ==============================================================================
+# --- DQN AGENT CLASS ---
+# ==============================================================================
 class DQNAgent:
-    def __init__(self, state_shape, action_dim, lr=0.0001, gamma=0.99, epsilon_start=1.0, 
-                 epsilon_end=0.1, epsilon_decay=0.995, buffer_size=50000, batch_size=64, 
-                 target_update=100):
+    def __init__(self, state_shape, action_dim, lr=LEARNING_RATE, gamma=GAMMA, epsilon_start=EPSILON_START, 
+                 epsilon_end=EPSILON_END, epsilon_decay=EPSILON_DECAY, buffer_size=BUFFER_SIZE, 
+                 batch_size=BATCH_SIZE, target_update=TARGET_UPDATE_FREQUENCY):
         self.state_shape = state_shape
         self.action_dim = action_dim
         self.gamma = gamma
@@ -229,21 +247,17 @@ class DQNAgent:
         self.steps = 0
 
     def select_action(self, state):
-        if state[3, 0, 0] == 1.0:
+        # Heuristic: if robot is full, navigate directly to delivery
+        if state[3, 0, 0] * MAX_CAPACITY >= MAX_CAPACITY:
             robot_r, robot_c = np.where(state[1] == 1)
             robot_r, robot_c = robot_r[0], robot_c[0]
-            delivery_r, delivery_c = np.where(state[2] == 1)
-            delivery_r, delivery_c = delivery_r[0], delivery_c[0]
-            if robot_r > delivery_r:
-                return 0
-            elif robot_r < delivery_r:
-                return 1
-            elif robot_c < delivery_c:
-                return 3
-            elif robot_c > delivery_c:
-                return 2
-            else:
-                return 0
+            delivery_r, delivery_c = DELIVERY_LOCATIONS[0]
+
+            if robot_r > delivery_r: return 0
+            elif robot_r < delivery_r: return 1
+            elif robot_c < delivery_c: return 3
+            elif robot_c > delivery_c: return 2
+            else: return random.randint(0, self.action_dim - 1)
         else:
             if random.random() < self.epsilon:
                 return random.randint(0, self.action_dim - 1)
@@ -265,14 +279,17 @@ class DQNAgent:
         actions = torch.LongTensor(actions)
         rewards = torch.FloatTensor(rewards)
         dones = torch.FloatTensor(dones)
+        
         q_values = self.q_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
         with torch.no_grad():
             next_q_values = self.target_net(next_states).max(1)[0]
             target_q = rewards + self.gamma * next_q_values * (1 - dones)
+        
         loss = F.mse_loss(q_values, target_q)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
+        
         self.steps += 1
         if self.steps % self.target_update == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
@@ -280,20 +297,21 @@ class DQNAgent:
     def decay_epsilon(self):
         self.epsilon = max(self.epsilon_end, self.epsilon * self.epsilon_decay)
 
+# ==============================================================================
+# --- MAIN TRAINING LOOP ---
+# ==============================================================================
 if __name__ == "__main__":
-    env = WarehouseEnvMultiPod(seed=42)
-    agent = DQNAgent(state_shape=(4, 10, 10), action_dim=4)
-    num_episodes = 1000
-    render_frequency = 100
-
-    recent_rewards = deque(maxlen=10)
+    env = WarehouseEnvMultiPod(seed=SEED)
+    agent = DQNAgent(state_shape=DQN_SHAPE, action_dim=ACTION_DIM)
+    
+    recent_rewards = deque(maxlen=REWARD_AVERAGE_WINDOW)
     best_avg_reward = float('-inf')
 
-    for episode in range(num_episodes):
-        # Load best weights at the start of each episode if available
-        if os.path.exists('best_model.pth'):
-            agent.q_net.load_state_dict(torch.load('best_model.pth'))
+    for episode in range(NUM_EPISODES):
+        if os.path.exists(MODEL_PATH):
+            agent.q_net.load_state_dict(torch.load(MODEL_PATH))
             agent.target_net.load_state_dict(agent.q_net.state_dict())
+        
         state = env.reset()
         total_reward = 0
         step = 0
@@ -301,7 +319,7 @@ if __name__ == "__main__":
 
         while not done:
             action = agent.select_action(state)
-            render = (episode % render_frequency == 0)
+            render = (episode % RENDER_FREQUENCY == 0)
             next_state, reward, done = env.step(action, total_reward, render=render)
             agent.store_experience(state, action, reward, next_state, done)
             agent.update()
@@ -314,13 +332,13 @@ if __name__ == "__main__":
         print(f"Episode {episode+1}, Total Reward: {total_reward}")
         agent.decay_epsilon()
         
-        if episode % render_frequency == 0:
+        if episode % RENDER_FREQUENCY == 0:
             env.render(total_reward=total_reward)
         
         recent_rewards.append(total_reward)
-        if len(recent_rewards) > 0:
+        if len(recent_rewards) == REWARD_AVERAGE_WINDOW:
             avg_reward = sum(recent_rewards) / len(recent_rewards)
             if avg_reward > best_avg_reward:
                 best_avg_reward = avg_reward
-                torch.save(agent.q_net.state_dict(), 'best_model.pth')
+                torch.save(agent.q_net.state_dict(), MODEL_PATH)
                 print(f"Model saved with average reward: {avg_reward:.2f}")

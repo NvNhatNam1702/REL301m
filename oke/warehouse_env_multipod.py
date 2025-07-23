@@ -2,11 +2,14 @@ import numpy as np
 import tkinter as tk
 import random
 
+
+GRID_HEIGHT = 6
+GRID_WIDTH = 6
 class WarehouseEnvMultiPod:
     def __init__(self, seed=None):
         self.seed(seed)
-        self.grid_height = 10
-        self.grid_width = 10
+        self.grid_height = GRID_HEIGHT
+        self.grid_width = GRID_WIDTH
 
         # Each cell can have 0 to 3 pods
         self.max_pods_per_cell = 3
