@@ -1,10 +1,10 @@
 import numpy as np
 from warehouse_env_multipod import WarehouseEnvMultiPod as OriginalEnv
-from test2 import WarehouseEnvMultiPod as Test2Env, DQNAgent
+# from test2 import WarehouseEnvMultiPod as Test2Env, DQNAgent
 from greedy_batch_astar_agent import GreedyBatchAStarAgent
 import torch
 import random
-
+from config import DQN_SHAPE, ENV_SHAPE
 # Function to generate 100 unique random seeds
 def generate_random_seeds(num_seeds=100, min_seed=1, max_seed=100000):
     random.seed(42)  # Fixed seed for reproducible seed generation
@@ -39,7 +39,7 @@ def run_dqn_agent(env, seed, model_path='best_model.pth'):
     env.seed(seed)
     state = env.reset()
     agent = DQNAgent(
-        state_shape=(4, 10, 10), 
+        state_shape=DQN_SHAPE, 
         action_dim=4,
         epsilon_start=0.1,  # Set epsilon to 0.1
         epsilon_end=0.1,    # Ensure epsilon stays at 0.1

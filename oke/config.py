@@ -1,6 +1,6 @@
 # --- Environment Constants ---
 GRID_HEIGHT = 6
-GRID_WIDTH = 6
+GRID_WIDTH =6
 # BUG FIX: The original workstations/delivery locations were outside the 6x6 grid.
 # I've adjusted them to be within the grid.
 WORKSTATIONS = [(5, 0)]

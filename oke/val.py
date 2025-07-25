@@ -1,15 +1,15 @@
 import torch
 import numpy as np
-from test2 import WarehouseEnvMultiPod
-from test2 import DQNAgent
-
+from train import WarehouseEnvMultiPod
+from train import DQNAgent
+from config import DQN_SHAPE
 # Define evaluation seeds for consistency
 eval_seeds = [43, 44, 45, 46, 47, 48, 49, 50, 51, 52]
 
 # Initialize the agent and load the trained model
-agent = DQNAgent(state_shape=(4, 10, 10), action_dim=4)
+agent = DQNAgent(state_shape=DQN_SHAPE, action_dim=4)
 try:
-    agent.q_net.load_state_dict(torch.load('best_model.pth'))
+    agent.q_net.load_state_dict(torch.load('model/best_model_6*6.pth'))
     agent.q_net.eval()  # Set the network to evaluation mode
     print("Loaded best_model.pth successfully")
 except FileNotFoundError:
